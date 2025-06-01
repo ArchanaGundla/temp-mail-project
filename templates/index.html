@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Disposable Email Generator</title>
+  <style>
+    /* Reset & base */
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f0f4f8;
+      color: #333;
+      max-width: 720px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+    h1 {
+      text-align: center;
+      color: #1a73e8;
+      margin-bottom: 1rem;
+      font-weight: 700;
+      font-size: 2.2rem;
+    }
+    button {
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      font-size: 1.1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+      display: block;
+      margin: 0 auto 1.5rem auto;
+      box-shadow: 0 4px 8px rgba(26,115,232,0.3);
+    }
+    button:hover {
+      background-color: #155ab6;
+    }
+    #email {
+      font-weight: 700;
+      font-size: 1.3rem;
+      text-align: center;
+      margin-bottom: 0.5rem;
+      color: #0d47a1;
+      word-break: break-all;
+    }
+    #expires {
+      text-align: center;
+      font-size: 0.95rem;
+      color: #555;
+      margin-bottom: 1.5rem;
+      font-style: italic;
+    }
+
+    #messages {
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+      max-height: 300px;
+      overflow-y: auto;
+      padding: 1rem;
+      font-size: 1rem;
+    }
+    #messages h2 {
+      margin-top: 0;
+      margin-bottom: 1rem;
+      color: #1a237e;
+      font-weight: 700;
+      border-bottom: 2px solid #1a73e8;
+      padding-bottom: 0.3rem;
+    }
+    .msg-container {
+      margin-bottom: 10px;
+    }
+    .msg-header {
+      padding: 12px 15px;
+      border-bottom: 1px solid #e0e0e0;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+      color: #0d47a1;
+      font-weight: 600;
+      user-select: none;
+      border-radius: 6px;
+      background-color: #f9fbfe;
+      box-shadow: inset 0 0 5px rgba(26,115,232,0.1);
+    }
+    .msg-header:hover {
+      background-color: #e3f2fd;
+    }
+    .msg-detail {
+      padding: 10px;
+      background: #e8f0fe;
+      border-radius: 6px;
+      margin-top: 5px;
+      white-space: pre-wrap;
+      font-size: 0.95rem;
+      color: #1a237e;
+      box-shadow: inset 0 0 10px rgba(26,115,232,0.15);
+      display: none;
+    }
+
+    /* Scrollbar styling for messages */
+    #messages::-webkit-scrollbar {
+      width: 8px;
+    }
+    #messages::-webkit-scrollbar-thumb {
+      background-color: #90caf9;
+      border-radius: 4px;
+    }
+
+    /* Responsive */
+    @media (max-width: 480px) {
+      body {
+        max-width: 95%;
+      }
+      button {
+        width: 100%;
+        font-size: 1rem;
+        padding: 12px 0;
+      }
+      .msg-detail {
+        font-size: 0.9rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Disposable Email Generator</h1>
+  <button id="generateBtn">Generate Email</button>
+  <div id="email"></div>
+  <div id="expires"></div>
+  <div id="messages"></div>
+
+  <script>
+    let emailAddress = null;
+    let expiresIn = 0;
+    let intervalId = null;
+
+    document.getElementById("generateBtn").onclick = async () => {
+      try {
+        const res = await fetch('/generate', { method: 'POST' });
+        if (!res.ok) throw new Error("Failed to generate email");
+        const data = await res.json();
+        emailAddress = data.email;
+        expiresIn = data.expires_in;
+        document.getElementById("email").textContent = "Your email: " + emailAddress;
+        clearMessagesAndDetails();
+        startExpirationCountdown();
+        fetchMessages();
+      } catch (e) {
+        alert("Error generating email: " + e.message);
+      }
+    };
+
+    function clearMessagesAndDetails() {
+      document.getElementById("messages").innerHTML = "";
+    }
+
+    function startExpirationCountdown() {
+      if (intervalId) clearInterval(intervalId);
+      updateExpires();
+      intervalId = setInterval(() => {
+        expiresIn--;
+        if (expiresIn <= 0) {
+          clearInterval(intervalId);
+          document.getElementById("expires").textContent = "Email expired.";
+          document.getElementById("email").textContent = "";
+          clearMessagesAndDetails();
+          emailAddress = null;
+        } else {
+          updateExpires();
+        }
+      }, 1000);
+    }
+
+    function updateExpires() {
+      const minutes = Math.floor(expiresIn / 60);
+      const seconds = expiresIn % 60;
+      document.getElementById("expires").textContent = `Expires in: ${minutes}m ${seconds}s`;
+    }
+
+    async function fetchMessages() {
+      if (!emailAddress) return;
+      try {
+        const res = await fetch(`/inbox/${encodeURIComponent(emailAddress)}`);
+        if (res.status !== 200) {
+          document.getElementById("messages").innerHTML = "<p>Inbox expired or not found.</p>";
+          return;
+        }
+        const data = await res.json();
+        expiresIn = data.expires_in;
+        updateExpires();
+
+        let html = "<h2>Messages</h2>";
+        if (data.messages.length === 0) {
+          html += "<p>No messages yet.</p>";
+        } else {
+          data.messages.forEach(msg => {
+            const safeSubject = msg.subject.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const safeFrom = msg.from.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            html += `
+              <div class="msg-container" data-id="${msg.id}">
+                <div class="msg-header">${safeSubject} - From: ${safeFrom}</div>
+                <div class="msg-detail"></div>
+              </div>
+            `;
+          });
+        }
+        document.getElementById("messages").innerHTML = html;
+
+        // Attach toggle event handlers
+        document.querySelectorAll('.msg-container').forEach(container => {
+          const header = container.querySelector('.msg-header');
+          const detailDiv = container.querySelector('.msg-detail');
+          header.onclick = async () => {
+            if (detailDiv.style.display === 'block') {
+              // Close detail
+              detailDiv.style.display = 'none';
+              detailDiv.textContent = '';
+            } else {
+              // Open detail, fetch message content
+              const msgId = container.getAttribute('data-id');
+              try {
+                const res = await fetch(`/message/${encodeURIComponent(emailAddress)}/${encodeURIComponent(msgId)}`);
+                if (!res.ok) {
+                  alert('Message not found.');
+                  return;
+                }
+                const msg = await res.json();
+                detailDiv.textContent = `Subject: ${msg.subject}\nFrom: ${msg.from}\nTo: ${msg.to}\nDate: ${msg.date}\n\n${msg.body}`;
+                detailDiv.style.display = 'block';
+              } catch {
+                alert('Error loading message.');
+              }
+            }
+          };
+        });
+
+      } catch (e) {
+        document.getElementById("messages").innerHTML = "<p>Error loading messages.</p>";
+      }
+    }
+
+    // Auto-refresh inbox every 15 seconds
+    setInterval(() => {
+      if (emailAddress) fetchMessages();
+    }, 5000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Disposable Email</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 700px; margin: 2em auto; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+        #email { margin-top: 20px; font-weight: bold; font-size: 18px; }
+        #expires { color: #666; margin-bottom: 20px; }
+        #messages { margin-top: 20px; }
+        .msg { border-bottom: 1px solid #ccc; padding: 10px; cursor: pointer; }
+        .msg:hover { background: #f9f9f9; }
+        #msg-detail { white-space: pre-wrap; background: #eee; padding: 15px; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <h1>Disposable Email Generator</h1>
+    <button id="generateBtn">Generate Email</button>
+    <div id="email"></div>
+    <div id="expires"></div>
+    <div id="messages"></div>
+    <div id="msg-detail"></div>
+
+    <script>
+        let emailAddress = null;
+        let expiresIn = 0;
+        let intervalId = null;
+
+        document.getElementById("generateBtn").onclick = async () => {
+            const res = await fetch('/generate', { method: 'POST' });
+            const data = await res.json();
+            emailAddress = data.email;
+            expiresIn = data.expires_in;
+            document.getElementById("email").textContent = "Your email: " + emailAddress;
+            document.getElementById("msg-detail").textContent = "";
+            startExpirationCountdown();
+            fetchMessages();
+        };
+
+        function startExpirationCountdown() {
+            if (intervalId) clearInterval(intervalId);
+            updateExpires();
+            intervalId = setInterval(() => {
+                expiresIn--;
+                if (expiresIn <= 0) {
+                    clearInterval(intervalId);
+                    document.getElementById("expires").textContent = "Email expired.";
+                    document.getElementById("email").textContent = "";
+                    document.getElementById("messages").innerHTML = "";
+                    emailAddress = null;
+                } else {
+                    updateExpires();
+                }
+            }, 1000);
+        }
+
+        function updateExpires() {
+            const minutes = Math.floor(expiresIn / 60);
+            const seconds = expiresIn % 60;
+            document.getElementById("expires").textContent = `Expires in: ${minutes}m ${seconds}s`;
+        }
+
+        async function fetchMessages() {
+            if (!emailAddress) return;
+            const res = await fetch(`/inbox/${emailAddress}`);
+            if (res.status !== 200) {
+                document.getElementById("messages").innerHTML = "<p>Inbox expired or not found.</p>";
+                return;
+            }
+            const data = await res.json();
+            expiresIn = data.expires_in;
+            updateExpires();
+
+            let html = "<h2>Messages</h2>";
+            if (data.messages.length === 0) {
+                html += "<p>No messages yet.</p>";
+            } else {
+                data.messages.forEach(msg => {
+                    html += `<div class="msg" onclick="showMessage('${msg.id}')">${msg.subject} - From: ${msg.from}</div>`;
+                });
+            }
+            document.getElementById("messages").innerHTML = html;
+        }
+
+        async function showMessage(id) {
+            if (!emailAddress) return;
+            const res = await fetch(`/message/${emailAddress}/${id}`);
+            if (res.status !== 200) {
+                alert("Message not found.");
+                return;
+            }
+            const msg = await res.json();
+            const detail = `Subject: ${msg.subject}\nFrom: ${msg.from}\nTo: ${msg.to}\nDate: ${msg.date}\n\n${msg.body}`;
+            document.getElementById("msg-detail").textContent = detail;
+        }
+
+        // Auto-refresh inbox every 15 seconds
+        setInterval(() => {
+            if (emailAddress) fetchMessages();
+        }, 15000);
+    </script>
+</body>
+</html>
