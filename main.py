@@ -1,18 +1,17 @@
 import asyncio
 import uuid
 import time
-from fastapi import FastAPI, HTTPException
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
-from fastapi.requests import Request
+import threading
+import signal
+import sys
+from flask import Flask, request, jsonify, render_template, abort, make_response
 from typing import Dict
 import aioimaplib
 import email
 from email.policy import default
 import email.utils
 
-app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+app = Flask(__name__)
 
 DOMAIN = "trueelement.in"
 IMAP_HOST = "mail.trueelement.in"
@@ -21,7 +20,6 @@ IMAP_PASS = "trueelement@123"
 IMAP_PORT = 993
 EXPIRATION_SECONDS = 600  # 10 minutes
 
-# Store inboxes {email: {created: timestamp, messages: [list of messages]}}
 inboxes: Dict[str, Dict] = {}
 
 def cleanup_expired():
@@ -31,38 +29,46 @@ def cleanup_expired():
         print(f"Cleaning expired inbox: {em}")
         del inboxes[em]
 
-@app.post("/generate")
-async def generate():
+@app.after_request
+def add_cors_headers(response):
+    # Optional: allows cross-origin requests (remove if not needed)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+@app.route("/generate", methods=["POST"])
+def generate():
     cleanup_expired()
     local = uuid.uuid4().hex[:8]
     em = f"{local}@{DOMAIN}"
     inboxes[em] = {"created": time.time(), "messages": []}
     print(f"Generated email: {em}")
-    return {"email": em, "expires_in": EXPIRATION_SECONDS}
+    return jsonify({"email": em, "expires_in": EXPIRATION_SECONDS})
 
-@app.get("/inbox/{email_address}")
-async def inbox(email_address: str):
+@app.route("/inbox/<email_address>", methods=["GET"])
+def inbox(email_address):
     cleanup_expired()
     print(f"Fetching inbox for: {email_address}")
     if email_address not in inboxes:
-        raise HTTPException(404, "Inbox expired or not found")
+        abort(404, description="Inbox expired or not found")
     data = inboxes[email_address]
     expires = int(EXPIRATION_SECONDS - (time.time() - data["created"]))
-    return {"messages": data["messages"], "expires_in": expires}
+    return jsonify({"messages": data["messages"], "expires_in": expires})
 
-@app.get("/message/{email_address}/{msg_id}")
-async def message(email_address: str, msg_id: str):
+@app.route("/message/<email_address>/<msg_id>", methods=["GET"])
+def message(email_address, msg_id):
     cleanup_expired()
     if email_address not in inboxes:
-        raise HTTPException(404, "Inbox expired or not found")
+        abort(404, description="Inbox expired or not found")
     for m in inboxes[email_address]["messages"]:
         if m["id"] == msg_id:
-            return m
-    raise HTTPException(404, "Message not found")
+            return jsonify(m)
+    abort(404, description="Message not found")
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+@app.route("/")
+def home():
+    return render_template("index.html")
 
 async def fetch_mail():
     try:
@@ -130,11 +136,29 @@ async def fetch_mail():
     except Exception as e:
         print("Error fetching mail:", e)
 
-async def background_fetcher():
-    while True:
-        await fetch_mail()
-        await asyncio.sleep(10)
+def background_fetcher(stop_event: threading.Event):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    while not stop_event.is_set():
+        loop.run_until_complete(fetch_mail())
+        stop_event.wait(10)
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(background_fetcher())
+stop_event = threading.Event()
+
+def start_background_thread():
+    thread = threading.Thread(target=background_fetcher, args=(stop_event,), daemon=True)
+    thread.start()
+    return thread
+
+def signal_handler(sig, frame):
+    print("Shutting down...")
+    stop_event.set()
+    sys.exit(0)
+
+if __name__ == "__main__":
+    # Register signal handler to cleanly shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    start_background_thread()
+    app.run(debug=True)
